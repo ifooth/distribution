@@ -152,6 +152,18 @@ func (pr *proxyingRegistry) Repositories(ctx context.Context, repos []string, la
 func (pr *proxyingRegistry) Repository(ctx context.Context, name reference.Named) (distribution.Repository, error) {
 	c := pr.authChallenger
 
+	localName := name
+	remoteURL := pr.remoteURL
+	remoteURL, name, err := extractRemoteURL(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	localName, err = reference.WithName(remoteURL.Host + "/" + name.Name())
+	if err != nil {
+		return nil, err
+	}
+
 	tkopts := auth.TokenHandlerOptions{
 		Transport:   http.DefaultTransport,
 		Credentials: c.credentialStore(),
@@ -169,7 +181,7 @@ func (pr *proxyingRegistry) Repository(ctx context.Context, name reference.Named
 			auth.NewTokenHandlerWithOptions(tkopts),
 			auth.NewBasicHandler(pr.basicAuth)))
 
-	localRepo, err := pr.embedded.Repository(ctx, name)
+	localRepo, err := pr.embedded.Repository(ctx, localName)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +190,7 @@ func (pr *proxyingRegistry) Repository(ctx context.Context, name reference.Named
 		return nil, err
 	}
 
-	remoteRepo, err := client.NewRepository(name, pr.remoteURL.String(), tr)
+	remoteRepo, err := client.NewRepository(name, remoteURL.String(), tr)
 	if err != nil {
 		return nil, err
 	}
@@ -194,11 +206,11 @@ func (pr *proxyingRegistry) Repository(ctx context.Context, name reference.Named
 			remoteStore:    remoteRepo.Blobs(ctx),
 			scheduler:      pr.scheduler,
 			ttl:            pr.ttl,
-			repositoryName: name,
+			repositoryName: localName,
 			authChallenger: pr.authChallenger,
 		},
 		manifests: &proxyManifestStore{
-			repositoryName:  name,
+			repositoryName:  localName,
 			localManifests:  localManifests, // Options?
 			remoteManifests: remoteManifests,
 			ctx:             ctx,
@@ -260,7 +272,14 @@ func (r *remoteAuthChallenger) tryEstablishChallenges(ctx context.Context) error
 	defer r.Unlock()
 
 	remoteURL := r.remoteURL
+
+	requestRemoteNSURL, _, err := extractRemoteURL(ctx)
+	if err != nil {
+		return err
+	}
+	remoteURL = requestRemoteNSURL
 	remoteURL.Path = "/v2/"
+
 	challenges, err := r.cm.GetChallenges(remoteURL)
 	if err != nil {
 		return err
@@ -303,4 +322,30 @@ func (pr *proxiedRepository) Named() reference.Named {
 
 func (pr *proxiedRepository) Tags(ctx context.Context) distribution.TagService {
 	return pr.tags
+}
+
+func extractRemoteURL(ctx context.Context) (url.URL, reference.Named, error) {
+	r, err := dcontext.GetRequest(ctx)
+	if err != nil {
+		return url.URL{}, nil, err
+	}
+
+	// ns 不为空, containerd 镜像模式
+	ns := r.URL.Query().Get("ns")
+
+	// 如果没有 ns或者docker, 需要替换为docker底层域名
+	if ns == "" || ns == "docker.io" {
+		ns = "registry-1.docker.io"
+	}
+
+	name := dcontext.GetStringValue(ctx, "vars.name")
+	named, err := reference.WithName(name)
+	if err != nil {
+		return url.URL{}, nil, err
+	}
+
+	return url.URL{
+		Scheme: "https",
+		Host:   ns,
+	}, named, nil
 }
