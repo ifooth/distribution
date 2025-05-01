@@ -272,13 +272,13 @@ func (r *remoteAuthChallenger) tryEstablishChallenges(ctx context.Context) error
 	defer r.Unlock()
 
 	remoteURL := r.remoteURL
-	remoteURL.Path = "/v2/"
 
 	requestRemoteNSURL, _, err := extractRemoteURL(ctx)
 	if err != nil {
 		return err
 	}
 	remoteURL = requestRemoteNSURL
+	remoteURL.Path = "/v2/"
 
 	challenges, err := r.cm.GetChallenges(remoteURL)
 	if err != nil {
