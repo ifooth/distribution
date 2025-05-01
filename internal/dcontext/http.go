@@ -254,3 +254,10 @@ func (irw *instrumentedResponseWriter) Value(key interface{}) interface{} {
 
 	return irw.Context.Value(key)
 }
+
+func GetRequest(ctx context.Context) (*http.Request, error) {
+	if r, ok := ctx.Value("http.request").(*http.Request); r != nil && ok {
+		return r, nil
+	}
+	return nil, ErrNoRequestContext
+}
